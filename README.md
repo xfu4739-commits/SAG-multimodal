@@ -1,245 +1,169 @@
 <p align="center">
-  <img src="docs/assets/logo.svg" alt="Zleap AI" width="220" />
+  <img src="docs/assets/logo.svg" alt="SAG" width="220" />
 </p>
 
-# SAG
+# SAG-multimodal
 
+基于 [Zleap-AI/SAG](https://github.com/Zleap-AI/SAG)（MIT License）二次开发的文档检索工作台。当前 **v1.0.0** 提供文本 RAG 基线能力，团队将在此基础上扩展多模态检索。
 
-**Language**: English | [简体中文](README-CN.md)
+> **论文**：[SAG: Graph Retrieval on Large-Scale Dynamic Data](https://arxiv.org/abs/2606.15971)
+>
+> **上游项目**：[Zleap-AI/SAG](https://github.com/Zleap-AI/SAG) · **论文复现**：[Zleap-AI/SAG-Benchmark](https://github.com/Zleap-AI/SAG-Benchmark)
 
+上传 Markdown / TXT 文档后，系统自动完成切片、向量化、事项提取、实体提取和关系整理。你可以像使用 ChatGPT 一样围绕项目资料连续提问，也可以查看切片、事项、实体、Embedding、搜索过程、原始模型日志和知识图谱。
 
-> **SAG:** Graph retrieval technology capable of running on large-scale dynamic data.
-> 
-> **Paper:** [https://arxiv.org/abs/2606.15971](https://arxiv.org/abs/2606.15971)
+![SAG 对话工作台](docs/assets/sag-chat.png)
 
+## 版本规划
 
-This project is an out-of-the-box document retrieval workbench built on SAG. After you upload Markdown or TXT documents, SAG automatically handles chunking, vectorization, event extraction, entity extraction, and relation organization. You can ask questions over project documents in a ChatGPT-like interface, inspect chunks, events, entities, embeddings, search traces, raw model logs, and explore the knowledge graph.
+| 版本 | 状态 | 说明 |
+|------|------|------|
+| v1.0.0 | 已发布 | 文本 RAG 基线，fork 自上游 SAG |
+| v2.x | 开发中 | 多模态文档解析与检索扩展 |
 
-![SAG chat workbench](docs/assets/sag-chat.png)
+## SAG 是什么
 
-## RAG SOTA and Benchmark
-
-SAG benchmark reproduction code: [Zleap-AI/SAG-Benchmark](https://github.com/Zleap-AI/SAG-Benchmark)
-
-SAG is a next-generation RAG approach designed for agents. Instead of stuffing more chunks into the model, it organizes document knowledge with a lighter structure:
-
-```text
-chunk -> event
-chunk -> entities
-event <-> entities
-```
-
-Each chunk extracts one complete event and multiple entities. The event preserves the full semantic unit, while entities build the index and enable relational expansion, so retrieval can start from a matched event and continue through multi-hop recall without the rebuild cost of a heavyweight knowledge graph.
-
-![SAG architecture](docs/assets/paper-sag-architecture.jpeg)
-
-On HotpotQA / 2WikiMultiHop / MuSiQue, under the same configuration:
+SAG 是面向 Agent 的 RAG 技术路线，用轻量结构重组文档知识，而不是简单堆砌 chunk：
 
 ```text
-Embedding = bge-large-en-v1.5
-LLM = qwen3.6-flash
-Datasets = HotpotQA / 2WikiMultiHop / MuSiQue
+chunk → event（事项，保留完整语义）
+chunk → entities（实体，负责索引与关系扩展）
+event ↔ entities（多跳召回）
 ```
 
-Compared with HippoRAG 2, SAG achieves clear recall improvements on multi-hop QA: **average Recall@2 improves from 68.14% to 79.30%, a gain of 11.16 percentage points, or about 16.4% relative improvement**. Higher Recall@2 means agents can hit key evidence earlier with less context, reducing token cost, latency, and distraction in multi-turn tasks.
+![SAG 架构图](docs/assets/paper-sag-architecture.jpeg)
 
-![SAG benchmark summary](docs/assets/sag-benchmark-simple.png)
+在 HotpotQA / 2WikiMultiHop / MuSiQue 基准上，SAG 对比 HippoRAG 2 的平均 Recall@2 从 68.14% 提升到 79.30%（+11.16 个百分点）。详见[论文](https://arxiv.org/abs/2606.15971)与[基准复现仓库](https://github.com/Zleap-AI/SAG-Benchmark)。
 
-On MuSiQue Recall@5, SAG improves from HippoRAG 2's 65.13% to 80.04%; after switching to NV-Embed-v2, it further reaches 81.71%, showing that the gain mainly comes from the structure rather than only a stronger embedding model.
+## 功能概览
 
-## What SAG Can Do
+- **项目管理**：每个项目拥有独立的文档、对话、图谱和 MCP 配置
+- **多文档上传**：支持批量上传 Markdown / TXT，展示处理阶段和进度
+- **文档处理结果**：查看切片、事项、实体、Embedding，支持标题搜索和分页
+- **对话式检索**：多轮提问，流式输出，支持停止生成
+- **引用原文**：回答中显示引用序号，点击可查看对应原文块
+- **搜索过程可视化**：右侧面板实时展示 SAG 内部检索链路和耗时
+- **原始日志**：可查看 LLM / Embedding / Rerank 原始请求和返回
+- **知识图谱**：以实体和事项为节点浏览项目关系
+- **MCP 接入**：每个项目可生成独立 MCP 配置，供外部 Agent 调用
+- **文档归档**：支持项目/文档软归档，归档后不参与检索，可恢复
 
-This project turns SAG into a local workbench that can run immediately. It is suitable for:
+### 检索模式
 
-- Project document Q&A
-- Personal knowledge base search
-- RAG / agent prototype validation
-- Document event and entity analysis
-- MCP tool integration testing
-- Search pipeline debugging and model-call inspection
+- **极速模式**（默认）：query 直接在实体库做全文 / BM25 匹配，结合 SAG 多跳扩展，最后用 rerank 选 top-k，无需 LLM 抽实体
+- **标准模式**：LLM 抽取 query 实体，再走 SAG 多路召回和 LLM 精排，精度更高
 
-Core features:
+两种模式都基于 SAG 的 event/entity 索引和 SQL 多跳扩展，不是普通向量搜索。
 
-- **Project management**: each project has its own documents, conversations, graph, and MCP configuration.
-- **Multi-document upload**: upload multiple Markdown / TXT files at once, with processing stages and progress.
-- **Document processing results**: inspect chunks, events, entities, embedding data, keyword title search, and paginated browsing.
-- **Conversational retrieval**: ask multi-turn questions over the current project, with streaming output and stop generation.
-- **Source citations**: answers can show numbered citations; click a number to view the original chunk.
-- **Search trace visualization**: the right panel shows SAG's internal retrieval steps and latency in real time.
-- **Raw logs**: browser cache stores raw LLM / Embedding / Rerank requests and responses.
-- **Knowledge graph**: explore project relations with event and entity nodes; drag, zoom, expand, and open details.
-- **MCP integration**: each project exposes its own MCP configuration so external agents can call the current project directly.
+## 技术栈
 
-## Tech Stack
+| 层级 | 技术 |
+|------|------|
+| 前端 | React、Vite、Tailwind CSS |
+| 后端 | Fastify、MCP TypeScript SDK |
+| 数据库 | PostgreSQL、pgvector、全文检索 |
+| 模型 | OpenAI-compatible LLM / Embedding / Rerank |
 
-SAG uses TypeScript across the stack. The frontend is a React + Vite + Tailwind CSS WebUI. The backend uses Fastify HTTP APIs, the MCP TypeScript SDK, and layered service modules. The data layer uses PostgreSQL, pgvector, full-text search, and SQL multi-hop queries. Model providers are OpenAI-compatible LLM, Embedding, and Rerank APIs.
+## 快速开始
 
-## Workbench Preview
+### 环境要求
 
-### Document Processing
-
-In the Document tab, you can upload documents, inspect processing status, chunks, events, entities, and embeddings.
-
-![SAG document view](docs/assets/sag-documents.png)
-
-### Graph Exploration
-
-In the Graph tab, you can explore entity-event relations across a project. Nodes support drag, zoom, click-to-expand, and double-click details.
-
-![SAG graph view](docs/assets/sag-graph.png)
-
-### Conversational Retrieval
-
-In the Chat tab, you can ask continuous questions over the current project. Each retrieval refreshes the right-side trace panel for debugging the current call chain.
-
-## Search Modes
-
-SAG provides two modes:
-
-- **Fast mode**: directly matches the query against the entity store using full-text / BM25 search, expands through SAG multi-hop retrieval, and finally uses `qwen3-rerank` to select top-k. This mode does not use an LLM to extract query entities or filter candidates, so it is much faster.
-- **Standard mode**: uses an LLM to extract query entities, then runs SAG multi-route recall and LLM reranking. This is useful when you want to compare the higher-precision pipeline.
-
-Both modes are more than ordinary vector search because both use SAG's event/entity index and SQL multi-hop expansion.
-
-## Quick Start
-
-### 1. Prepare the Environment
-
-You need:
-
-- Node.js 20 or later
+- Node.js ≥ 20
 - npm
-- PostgreSQL
-- pgvector
+- PostgreSQL + pgvector（推荐 Docker 启动）
 
-If you want the fastest setup, use Docker to start PostgreSQL.
-
-### 2. Clone the Project
+### 1. 克隆项目
 
 ```bash
-git clone https://github.com/Zleap-AI/SAG.git
-cd SAG
+git clone https://github.com/xfu4739-commits/SAG-multimodal.git
+cd SAG-multimodal
 ```
 
-### 3. Create the Config File
+### 2. 配置环境变量
 
 ```bash
 cp .env.example .env
 ```
 
-`.env.example` already contains default values. For real usage, fill in your own LLM and Embedding API keys.
+编辑 `.env`，填入 LLM 和 Embedding 的 API Key。未配置时系统使用本地 fallback，仅适合测试界面，无法获得真实检索效果。
 
-### 4. Start PostgreSQL
-
-Using Docker:
+### 3. 启动数据库
 
 ```bash
 docker compose up -d
 ```
 
-If you do not want to use Docker, you can use Homebrew on macOS:
-
-```bash
-brew install postgresql@17 pgvector
-brew services start postgresql@17
-
-/opt/homebrew/opt/postgresql@17/bin/createdb sag_lite
-/opt/homebrew/opt/postgresql@17/bin/psql -d sag_lite -c 'create extension if not exists vector;'
-```
-
-If you use a local PostgreSQL instance, update `DATABASE_URL` in `.env`, for example:
+Docker 镜像已包含 pgvector，默认连接信息：
 
 ```env
-DATABASE_URL=postgres://your_user@localhost:5432/sag_lite
+DATABASE_URL=postgres://sag_lite:sag_lite_pass@localhost:5432/sag_lite
 ```
 
-### 5. Install Dependencies and Initialize the Database
+### 4. 安装依赖并初始化
 
 ```bash
 npm install
 npm run db:setup
 ```
 
-### 6. Start the Development Server
+### 5. 启动开发服务
 
 ```bash
 npm run dev
 ```
 
-Default development URLs:
+| 服务 | 地址 |
+|------|------|
+| WebUI | http://localhost:5173 |
+| API | http://localhost:4173 |
 
-```text
-WebUI: http://localhost:5173
-API:   http://localhost:4173
-```
-
-### 7. Build and Start Production
+### 6. 生产部署（可选）
 
 ```bash
 npm run build
 npm start
 ```
 
-Default production URL:
+生产模式访问 http://localhost:4173
 
-```text
-http://localhost:4173
-```
+## 第一次使用
 
-## First Use
+1. 打开 WebUI，点击「新建项目」
+2. 进入「文档」页，上传 `.md` 或 `.txt` 文件
+3. 等待处理队列完成
+4. 在「对话」页围绕项目资料提问
+5. 调试时查看右侧「搜索过程」和「原始日志」
+6. 在「图谱」页查看实体关系
+7. 在「MCP」页复制配置，供外部 Agent 使用
 
-1. Open the WebUI.
-2. Click "New Project" at the top of the left project list.
-3. Go to the Document tab and click "Add Document".
-4. Upload `.md` or `.txt` files.
-5. Wait for the processing queue to finish.
-6. Inspect chunks, events, entities, and embedding status.
-7. Return to the Chat tab and ask questions over the current project.
-8. For debugging, inspect the right-side Search Trace and Raw Logs.
-9. For relationship exploration, open the Graph tab.
-10. For external agents, open the MCP tab and copy the current project's configuration.
+## 模型配置
 
-## Configure LLM and Embedding
-
-SAG supports OpenAI-compatible APIs. Default example:
+默认使用阿里云 DashScope 兼容接口（可在 `.env` 或 WebUI 全局设置中修改）：
 
 ```env
-EMBEDDING_BASE_URL=https://api.302ai.cn/v1
+EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 EMBEDDING_MODEL=text-embedding-3-large
 EMBEDDING_DIMENSIONS=1024
+EMBEDDING_API_KEY=
 
-LLM_BASE_URL=https://api.302ai.cn/v1
+LLM_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 LLM_MODEL=qwen3.6-flash
+LLM_API_KEY=
 
 RERANK_MODEL=qwen3-rerank
 DEFAULT_SEARCH_MODE=fast
 ```
 
-You can configure models in two ways:
+配置方式：
 
-### Option 1: WebUI Global Settings
+- **WebUI**：点击左侧设置图标，填写模型和 API Key（界面只显示「已配置 / 未配置」，不回显密钥）
+- **`.env`**：适合本地开发和 CI，**切勿将 `.env` 提交到 Git**
 
-Click the settings icon at the top of the left sidebar, open Global Settings, and fill in provider, model names, and API keys.
+重排序默认基于 `LLM_BASE_URL` 追加 `/reranks`；若平台 endpoint 不同，可单独设置 `RERANK_BASE_URL`。
 
-API keys only show as "Configured / Not configured". Plaintext keys are not echoed in the UI or API responses.
+## MCP 接入
 
-### Option 2: `.env`
-
-```env
-EMBEDDING_API_KEY=your_embedding_key
-LLM_API_KEY=your_llm_key
-RERANK_BASE_URL=https://api.your-provider.com/v1/rerank
-```
-
-By default, rerank requests use `LLM_BASE_URL` and append `/reranks`, for example `https://api.302ai.cn/v1/reranks`. Set `RERANK_BASE_URL` only when your provider needs a different full endpoint such as `/v1/rerank`.
-
-If no API key is configured, the system uses a local deterministic fallback. This is useful for tests and UI inspection, but real retrieval quality requires remote models.
-
-## MCP Integration
-
-SAG can act as an MCP Server for external agents. Each project's MCP configuration binds the current project ID, so tool calls do not need to pass `projectId`.
-
-Open the MCP tab in the WebUI to see the auto-generated `mcpServers` JSON for the current project. It looks like this:
+每个项目的 MCP 配置绑定当前项目 ID，工具调用时无需再传 `projectId`：
 
 ```json
 {
@@ -248,144 +172,102 @@ Open the MCP tab in the WebUI to see the auto-generated `mcpServers` JSON for th
       "command": "npm",
       "args": ["run", "mcp"],
       "env": {
-        "SAG_MCP_SOURCE_ID": "current_project_id"
+        "SAG_MCP_SOURCE_ID": "当前项目ID"
       }
     }
   }
 }
 ```
 
-Available MCP tools:
+可用工具：
 
-- `sag_ingest_document`: import a document and run chunking, event extraction, entity extraction, and vectorization.
-- `sag_search`: run SAG multi-route retrieval on the current project and return the internal trace.
-- `sag_explain_search`: return the current project's retrieval pipeline explanation and trace.
-- `sag_get_event`: query event details by event ID.
+| 工具 | 说明 |
+|------|------|
+| `sag_ingest_document` | 导入文档并执行切片、事项/实体抽取和向量化 |
+| `sag_search` | 对当前项目执行 SAG 多路检索，返回内部 trace |
+| `sag_explain_search` | 返回检索链路说明和 trace |
+| `sag_get_event` | 按事件 ID 查询详情 |
 
-## HTTP API Examples
-
-Health check:
+## HTTP API 示例
 
 ```bash
+# 健康检查
 curl http://localhost:4173/health
-```
 
-Create a project:
-
-```bash
+# 创建项目
 curl -X POST http://localhost:4173/api/projects \
   -H 'Content-Type: application/json' \
-  -d '{"name":"Demo Project"}'
-```
+  -d '{"name":"Demo 项目"}'
 
-Ingest a document:
-
-```bash
+# 写入文档
 curl -X POST http://localhost:4173/ingest \
   -H 'Content-Type: application/json' \
-  -d '{"sourceId":"project_id","title":"Demo","content":"# Demo\n\nSAG can search project documents.","extract":true}'
-```
+  -d '{"sourceId":"项目ID","title":"Demo","content":"# Demo\n\nSAG 可以检索项目文档。","extract":true}'
 
-Run search:
-
-```bash
+# 执行检索
 curl -X POST http://localhost:4173/api/search \
   -H 'Content-Type: application/json' \
-  -d '{"query":"Why is SAG suitable for multi-hop retrieval?","sourceIds":["project_id"],"strategy":"multi","searchMode":"fast","topK":5,"returnTrace":true}'
+  -d '{"query":"SAG 为什么适合多跳检索？","sourceIds":["项目ID"],"strategy":"multi","searchMode":"fast","topK":5,"returnTrace":true}'
 ```
 
-Stream search trace:
+## 常用命令
 
 ```bash
-curl -N -X POST http://localhost:4173/api/search/stream \
-  -H 'Content-Type: application/json' \
-  -d '{"query":"Explain SAG event/entity indexing","sourceIds":["project_id"],"strategy":"multi","returnTrace":true}'
+npm run dev          # 启动开发服务（API + WebUI）
+npm run build        # 构建生产版本
+npm start            # 启动生产服务
+npm run db:migrate   # 执行数据库迁移
+npm run db:setup     # 迁移 + 种子数据
+npm run mcp          # 启动 MCP stdio server
+npm run typecheck    # 类型检查
+npm test             # 运行测试
 ```
 
-## Common Commands
-
-```bash
-# Type check
-npm run typecheck
-
-# Run tests
-npm test
-
-# Build production assets
-npm run build
-
-# Start production server
-npm start
-
-# Start MCP stdio server
-npm run mcp
-```
-
-## Project Structure
+## 项目结构
 
 ```text
 src/
-  ai/                 LLM, Embedding, and Rerank clients
+  ai/                 LLM、Embedding、Rerank 客户端
   api/                HTTP API
-  config/             Environment configuration
-  db/                 Database connection, migrations, repositories, vector tools
-  ingestion/          Document chunking and event extraction
+  config/             环境配置
+  db/                 数据库连接、迁移、Repository
+  ingestion/          文档切片和事项提取
   mcp/                MCP Server
-  observability/      Logs and model-call records
-  services/           Document processing, search, graph, and WebUI services
+  observability/      日志和模型调用记录
+  services/           文档处理、搜索、图谱、WebUI 服务
 
-web/
-  src/                React WebUI
-
+web/src/              React WebUI
 migrations/           PostgreSQL schema
-test/                 Unit tests
-docs/assets/          README screenshots and diagrams
+test/                 单元测试
+docs/assets/          文档配图
 ```
 
-## FAQ
+## 常见问题
 
-### PostgreSQL Connection Failed
+**PostgreSQL 连接失败**
 
-First confirm that the database is running:
+确认数据库已启动（`docker compose ps`），并检查 `.env` 中的 `DATABASE_URL`。
 
-```bash
-docker compose ps
-```
-
-Then confirm that `DATABASE_URL` in `.env` is correct.
-
-### pgvector Is Missing
-
-Make sure pgvector is installed and run:
+**pgvector 扩展不存在**
 
 ```sql
 create extension if not exists vector;
 ```
 
-If you use `docker compose up -d`, the image already includes pgvector.
+使用 `docker compose up -d` 时镜像已包含 pgvector。
 
-### Why Do I Not See Real Model Quality?
+**没有真实模型效果**
 
-If `LLM_API_KEY` and `EMBEDDING_API_KEY` are not configured, the system enters local fallback mode. This is useful for testing, but it is not suitable for judging real retrieval quality.
+未配置 `LLM_API_KEY` 和 `EMBEDDING_API_KEY` 时进入本地 fallback 模式，不适合评估检索质量。
 
-### Document Processing Is Slow
+**文档处理很慢**
 
-Document processing calls Embedding and LLM APIs. Speed mainly depends on document count, chunk count, model API latency, and concurrency settings. You can tune this in `.env`:
+处理速度取决于文档量、切片数和模型接口延迟，可通过 `INGEST_CONCURRENCY=5` 调整并发。
 
-```env
-INGEST_CONCURRENCY=5
-```
+**端口被占用**
 
-### The Port Is Already in Use
+修改 `.env` 中的 `HTTP_PORT`；Vite 前端默认 5173，被占用时会自动切换。
 
-In development mode, update `.env`:
+## 开源协议
 
-```env
-HTTP_PORT=4173
-```
-
-The Vite WebUI uses `5173` by default. If the port is occupied, Vite will show the new address automatically.
-
-## License
-
-MIT License. See [LICENSE](LICENSE).
+本项目基于上游 [Zleap-AI/SAG](https://github.com/Zleap-AI/SAG) 二次开发，遵循 [MIT License](LICENSE)。保留上游版权声明，二次开发部分同样以 MIT 协议发布。
