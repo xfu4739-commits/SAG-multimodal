@@ -2,27 +2,30 @@ import { randomUUID } from "node:crypto";
 import { decode, encode } from "gpt-tokenizer/encoding/cl100k_base";
 import type { ChunkingMode } from "../../types.js";
 
+// 分块结果中的片段
 export interface SectionDraft {
   id: string;
   orderIndex: number;
-  heading: string;
-  content: string;
-  rawContent: string;
-  tokenCount: number;
+  heading: string; // 片段标题
+  content: string; // 片段内容
+  rawContent: string; // 片段原始内容
+  tokenCount: number; // 片段Token数
 }
 
+// 分块结果中的切片
 export interface ChunkDraft {
   id: string;
-  rank: number;
-  heading: string;
-  content: string;
+  rank: number; // 切片排名
+  heading: string; // 切片标题
+  content: string; // 切片内容
   rawContent: string;
-  sectionIds: string[];
+  sectionIds: string[]; // 片段ID列表
 }
 
+// 分块结果
 export interface ChunkingResult {
-  sections: SectionDraft[];
-  chunks: ChunkDraft[];
+  sections: SectionDraft[]; // 片段列表
+  chunks: ChunkDraft[]; // 切片列表
 }
 
 export interface ChunkMarkdownOptions {

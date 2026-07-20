@@ -157,7 +157,7 @@ function mcpToolCallFromRow(row: Record<string, unknown>): McpToolCallRecord {
   };
 }
 
-function aiProviderSettingsFromRow(row: Record<string, unknown>): AiProviderSettingsRecord {
+function aiProviderSettingsFromRow(row: Record<string, unknown>): AiProviderSettingsRecord {  // 从数据库行转换为AI提供者设置
   return {
     id: "global",
     embeddingBaseUrl: String(row.embedding_base_url),
@@ -1281,11 +1281,18 @@ export async function getEntityDetail(input: {
   };
 }
 
-export async function getAiProviderSettings(): Promise<AiProviderSettingsRecord | null> {
+// 获取AI提供者设置，获取数据库中第一条的AI提供者设置 AiProviderSettingsRecord
+export async function getAiProviderSettings(): Promise<AiProviderSettingsRecord | null> {  
   const result = await pool.query("select * from ai_provider_settings where id = 'global'");
-  return result.rows[0] ? aiProviderSettingsFromRow(result.rows[0]) : null;
+  /*
+  export interface QueryResult<R extends QueryResultRow = any> extends QueryResultBase {
+    rows: R[];
+  }
+  */
+  return result.rows[0] ? aiProviderSettingsFromRow(result.rows[0]) : null; // 格式转换
 }
 
+// 更新AI提供者设置，更新数据库中第一条的AI提供者设置 AiProviderSettingsRecord
 export async function upsertAiProviderSettings(input: {
   embeddingBaseUrl: string;
   embeddingModel: string;

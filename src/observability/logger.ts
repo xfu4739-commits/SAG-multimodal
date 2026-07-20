@@ -8,6 +8,10 @@ const loggerOptions = {
   },
 };
 
-export const logger = process.env.SAG_LOG_STDERR === "true"
+const useStderr =
+  process.env.SAG_LOG_STDERR === "true" ||
+  Boolean(process.env.SAG_MCP_SOURCE_ID?.trim() || process.env.SAG_MCP_PROJECT_ID?.trim());
+
+export const logger = useStderr
   ? pino(loggerOptions, pino.destination(2))
   : pino(loggerOptions);

@@ -27,6 +27,7 @@ import type {
   SearchTrace,
   SearchTraceEvent
 } from "../types.js";
+import { stdout } from "node:process";
 
 interface MultiOptions {
   subStrategy: MultiSubStrategy;
@@ -44,7 +45,7 @@ interface MultiOptions {
 }
 
 type SearchProgressEmitter = (event: SearchProgressEvent) => void;
-const MAX_SEARCH_RESULTS = MAX_SEARCH_TOP_K;
+const MAX_SEARCH_RESULTS = MAX_SEARCH_TOP_K; 
 
 export class SearchService {
   constructor(
@@ -58,7 +59,8 @@ export class SearchService {
     if (strategy !== "vector" && strategy !== "multi") {
       throw new Error(`Unsupported search strategy: ${String(strategy)}`);
     }
-
+    // 校验项目（scource）是否存在且可访问
+    // 函数里面自带断言
     await assertSourcesAccessible(input.sourceIds, tenantId);
     if (strategy === "vector") {
       return this.vectorSearch(input, emit);
@@ -90,33 +92,42 @@ export class SearchService {
   }
 
   async multiSearch(input: SearchInput, emit?: SearchProgressEmitter): Promise<SearchResult> {
+    // 获取运行时的大模型配置
+    // 先从数据库中拿配置，没有再从.env文件中兜底
     const runtimeSettings = await aiSettingsService.getRuntimeSettings();
-    const options = resolveMultiOptions(input, runtimeSettings.defaultSearchTopK);
+    // 整理SAG 多路检索的参数
+    const options : MultiOptions = resolveMultiOptions(input, runtimeSettings.defaultSearchTopK);
     const searchMode = input.searchMode ?? runtimeSettings.defaultSearchMode;
     const traceId = randomUUID();
     const timings: Record<string, number> = {};
     const trace: SearchTrace = {
-      traceId,
-      query: input.query,
-      searchMode,
-      queryEntities: [],
-      recalledEntities: [],
-      entityEventIds: [],
-      queryEventIds: [],
-      expandedEventIds: [],
-      coarseRankedEventIds: [],
-      rerankedEventIds: [],
-      timings
+      traceId, // 简写，变量名和字典的key相同
+      query: input.query, // 用户问题
+      searchMode, // 搜索模式
+      queryEntities: [], // 查询的实体
+      recalledEntities: [], // 召回的实体
+      entityEventIds: [], // 实体关联的事件
+      queryEventIds: [], // 标题向量召回的事件 （检索的时候，只用到了向量召回，没有用到LLM召回）
+      expandedEventIds: [], // 扩展的事件
+      coarseRankedEventIds: [], // 粗排的事件
+      rerankedEventIds: [], // 重排的事件
+      timings // 耗时字典
     };
 
-    const queryVector = await timed(timings, "queryEmbedding", () => this.embeddings.generate(input.query), emit, {
+    // 把用户问题转成向量，用于召回相关事件和切片。
+    // 这个timings是否是副本，不是副本
+    // 异步步骤包装器：包住检索流水线里的每一步，统一做三件事——执行、计时、上报进度。
+    const queryVector = await timed(timings, "queryEmbedding", 
+      () => this.embeddings.generate(input.query), 
+      emit, {
       title: "查询向量化",
       detail: "把用户问题转成向量，用于召回相关事件和切片。"
     });
 
-    let queryEntities: string[] = [];
-    let recalledEntities: EntityRecord[] = [];
+    let queryEntities: string[] = []; // 查询的实体name
+    let recalledEntities: EntityRecord[] = []; // 召回的实体
     if (searchMode === "fast") {
+      // 直接用用户问题在实体库做全文/BM25 匹配，不调用 LLM 抽取 key
       recalledEntities = await timed(timings, "step1Bm25Entities", () => searchEntitiesByText({
         sourceIds: input.sourceIds,
         query: input.query,
@@ -125,8 +136,11 @@ export class SearchService {
         title: "BM25 匹配查询实体",
         detail: "直接用用户问题在实体库做全文/BM25 匹配，不调用 LLM 抽取 key。"
       });
+      // 提取召回的实体名称，格式转换
       queryEntities = recalledEntities.map((entity) => entity.name);
+      // 更新 trace 中的查询实体
       trace.queryEntities = queryEntities;
+
       emitSearchStep(emit, timings, "step1Bm25Entities", {
         title: "BM25 匹配查询实体",
         detail: recalledEntities.length === 0 ? "没有匹配到查询实体" : `匹配到 ${recalledEntities.length} 个查询实体`,
@@ -138,6 +152,7 @@ export class SearchService {
         }))
       });
     } else {
+      // 使用LLM抽取实体
       queryEntities = await timed(timings, "step1ExtractEntities", () => this.llm.extractNamedEntities(input.query), emit, {
         title: "抽取查询实体",
         detail: "识别用户问题中的关键实体。"
@@ -148,43 +163,47 @@ export class SearchService {
         detail: queryEntities.length === 0 ? "没有识别到查询实体" : `识别到 ${queryEntities.length} 个查询实体`,
         payload: queryEntities
       });
-
+      // 通过LLM提取的实体name，从实体库中召回相关实体
       recalledEntities = await timed(timings, "step2RetrieveEntities", async () => {
+        // 精确召回 BM25关键字匹配
         const exact = await searchEntitiesByName({
           sourceIds: input.sourceIds,
           names: queryEntities,
           limit: options.entityTopK
         });
+        // 向量召回 向量做相似度匹配
         const byVector: EntityRecord[] = [];
         for (const entityName of queryEntities) {
-          const vector = await this.embeddings.generate(entityName);
-          byVector.push(...await searchEntitiesByVector({
+          const vector = await this.embeddings.generate(entityName); // 生成实体向量
+          byVector.push(...await searchEntitiesByVector({ // 向量做相似度匹配
             sourceIds: input.sourceIds,
             queryVector: vector,
             topK: options.entityTopK,
             threshold: options.keySimilarityThreshold
           }));
         }
-        return dedupeEntities([...exact, ...byVector]);
+        return dedupeEntities([...exact, ...byVector]); // 去重
       }, emit, {
         title: "召回相关实体",
         detail: "按实体名称和实体向量召回相关实体。"
       });
     }
+    // 更新trace中的召回实体，格式转换
     trace.recalledEntities = recalledEntities.map((entity) => ({
       id: entity.id,
       name: entity.name,
       type: entity.type,
       score: entity.score ?? 0
     }));
-    if (searchMode !== "fast") {
+
+    if (searchMode !== "fast") { // 如果搜索模式不是fast，则上报进度
       emitSearchStep(emit, timings, "step2RetrieveEntities", {
         title: "召回相关实体",
         detail: `召回 ${trace.recalledEntities.length} 个实体`,
         payload: trace.recalledEntities
       });
     }
-
+    // 根据实体召回所有关联事件id列表
     const entityEventIds = await timed(timings, "step3EntityEvents", () => getEventIdsByEntityIds({
       entityIds: recalledEntities.map((entity) => entity.id),
       sourceIds: input.sourceIds
@@ -192,32 +211,36 @@ export class SearchService {
       title: "实体关联事件",
       detail: "读取召回实体关联的候选事件。"
     });
+
     trace.entityEventIds = entityEventIds;
+
     emitSearchStep(emit, timings, "step3EntityEvents", {
       title: "实体关联事件",
       detail: `找到 ${entityEventIds.length} 个实体关联事件`
     });
 
+    // 标题向量召回事件，上面是根据实体召回事件，这里是通过向量召回事件
     const queryEvents = await timed(timings, "step3QueryEvents", () => searchEventsByTitleVector({
       sourceIds: input.sourceIds,
       queryVector,
       topK: options.multiTopK * 3,
       threshold: options.similarityThreshold
     }).then((events) => events.slice(0, options.multiTopK)), emit, {
-      title: "标题向量召回事件",
+      title: "标题向量召回事件", 
       detail: "按查询向量召回标题相关事件。"
     });
+
     trace.queryEventIds = queryEvents.map((event) => event.id);
-    trace.queryEvents = toTraceEvents(queryEvents);
-    appendEventSnapshots(trace, trace.queryEvents);
+    trace.queryEvents = toTraceEvents(queryEvents); 
+    appendEventSnapshots(trace, trace.queryEvents); // 添加事件快照
     emitSearchStep(emit, timings, "step3QueryEvents", {
       title: "标题向量召回事件",
       detail: `召回 ${trace.queryEvents.length} 个标题相关事件`,
       payload: trace.queryEvents
     });
-
+    // 合并实体事件和标题向量召回事件的id列表
     const seedEventIds = unique([...entityEventIds, ...queryEvents.map((event) => event.id)]);
-    if (seedEventIds.length === 0) {
+    if (seedEventIds.length === 0) { // 如果合并后的事件id列表为空，则使用向量召回切片
       trace.fallbackReason = "no seed events; used vector chunk search";
       emitSearchStep(emit, timings, "fallback", {
         title: "降级路径",
@@ -227,10 +250,12 @@ export class SearchService {
       return { ...fallback, trace: input.returnTrace ? trace : undefined };
     }
 
+    // 读取候选事件详情，包括事件及其关联实体
     const seedEvents = await timed(timings, "step4FetchDetails", () => getEventsWithEntityIds(seedEventIds), emit, {
       title: "读取候选事件详情",
       detail: "读取候选事件及其关联实体。"
     });
+    // 更新trace中的实体事件，格式转换
     trace.entityEvents = idsToTraceEvents(entityEventIds, seedEvents);
     appendEventSnapshots(trace, trace.entityEvents);
     emitSearchStep(emit, timings, "step4FetchDetails", {
@@ -238,6 +263,7 @@ export class SearchService {
       detail: `读取 ${seedEvents.size} 个候选事件详情`,
       payload: toTraceEvents([...seedEvents.values()])
     });
+    // 扩充事件，沿事件实体关系扩展候选事件集合。
     const expanded = await timed(timings, "step5Expand", () => this.expandEvents({
       seedEvents,
       initialEntityIds: recalledEntities.map((entity) => entity.id),
@@ -521,27 +547,30 @@ export class SearchService {
   }
 }
 
+// 把「请求里带的参数」和「默认值」合成一份完整、可直接用的检索超参 MultiOptions
+// 策略就是input有值的话使用，没有就设置默认值
 function resolveMultiOptions(input: SearchInput, defaultSearchTopK: number): MultiOptions {
-  const multi = input.multi ?? {};
-  const topK = resolveFinalSearchTopK(input.topK ?? defaultSearchTopK);
+  const multi = input.multi ?? {};  // input里面没有multi
+  const topK = resolveFinalSearchTopK(input.topK ?? defaultSearchTopK); // 解析最终的搜索结果数量
   const rerankTopK = resolveFinalSearchTopK(multi.rerankTopK ?? topK);
   const maxSections = resolveFinalSearchTopK(multi.maxSections ?? topK);
   return {
     subStrategy: input.subStrategy ?? "multi",
-    entityTopK: multi.entityTopK ?? 20,
-    multiTopK: multi.multiTopK ?? 20,
-    keySimilarityThreshold: multi.keySimilarityThreshold ?? 0.9,
-    similarityThreshold: multi.similarityThreshold ?? 0.4,
-    maxHops: multi.maxHops ?? 1,
-    maxEvents: multi.maxEvents ?? 100,
-    maxEventsA: multi.maxEventsA ?? 100,
-    maxEventsB: multi.maxEventsB ?? 0,
-    maxHopRetries: multi.maxHopRetries ?? 3,
+    entityTopK: multi.entityTopK ?? 20, // 实体数量 
+    multiTopK: multi.multiTopK ?? 20, // 事件数量
+    keySimilarityThreshold: multi.keySimilarityThreshold ?? 0.9, // 关键词相似度阈值
+    similarityThreshold: multi.similarityThreshold ?? 0.4, // 相似度阈值
+    maxHops: multi.maxHops ?? 1, // 最大跳数
+    maxEvents: multi.maxEvents ?? 100, // 最大事件数量
+    maxEventsA: multi.maxEventsA ?? 100, // 最大事件数量A
+    maxEventsB: multi.maxEventsB ?? 0, // 最大事件数量B
+    maxHopRetries: multi.maxHopRetries ?? 3, // 最大重试次数
     rerankTopK,
     maxSections
   };
 }
 
+// 解析最终的搜索结果数量
 function resolveFinalSearchTopK(value?: number): number {
   if (!Number.isFinite(value) || value == null) {
     return MAX_SEARCH_RESULTS;
@@ -549,6 +578,7 @@ function resolveFinalSearchTopK(value?: number): number {
   return Math.max(1, Math.min(Math.trunc(value), MAX_SEARCH_RESULTS));
 }
 
+// 收集新的实体ID
 function collectNewEntityIds(
   events: Map<string, EventRecord & { entityIds: string[] }>,
   trackedEntities: Set<string>
@@ -575,11 +605,11 @@ function dedupeEntities(entities: EntityRecord[]): EntityRecord[] {
 }
 
 async function timed<T>(
-  timings: Record<string, number>,
-  key: string,
-  fn: () => Promise<T>,
-  emit?: SearchProgressEmitter,
-  step?: { title: string; detail: string; payload?: unknown }
+  timings: Record<string, number>, // 耗时字典 timings["queryEmbedding"] = 120.5
+  key: string,  // 这一步的名字
+  fn: () => Promise<T>, // 要执行的函数
+  emit?: SearchProgressEmitter, // 进度回调函数
+  step?: { title: string; detail: string; payload?: unknown } // 给UI看的文案
 ): Promise<T> {
   const start = performance.now();
   if (emit && step) {

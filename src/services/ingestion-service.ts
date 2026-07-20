@@ -48,40 +48,43 @@ type PreparedEvent = EventEmbeddingInput & {
 
 export class IngestionService {
   constructor(
-    private readonly embeddings: EmbeddingClient = embeddingClient,
-    private readonly llm: LlmClient = llmClient
+    // private readonly 会自动变为类的成员字段，并自动赋值
+    private readonly embeddings: EmbeddingClient = embeddingClient, // 嵌入层客户端
+    private readonly llm: LlmClient = llmClient // LLM客户端
   ) {}
 
   async ingestDocument(
     input: IngestDocumentInput,
     tenantId = config.DEFAULT_TENANT_ID,
-    onProgress?: (update: IngestProgressUpdate) => void
+    onProgress?: (update: IngestProgressUpdate) => void // 可选的一个回调函数参数，用来在文档入库时实时显示进度
   ): Promise<IngestDocumentResult> {
-    const traceId = randomUUID();
-    const taskId = randomUUID();
-    const documentId = randomUUID();
-    const extract = input.extract ?? true;
-    const ingestConcurrency = config.INGEST_CONCURRENCY;
-    const runtimeSettings = await aiSettingsService.getRuntimeSettings();
+    const traceId = randomUUID(); // 追踪id
+    const taskId = randomUUID(); // 任务id
+    const documentId = randomUUID(); // 文档id
+    const extract = input.extract ?? true; // 是否提取事件
+    const ingestConcurrency = config.INGEST_CONCURRENCY; // 入库并发数
+    const runtimeSettings = await aiSettingsService.getRuntimeSettings(); // 获取运行时设置
     const chunkingOptions = {
-      mode: input.chunking?.mode ?? runtimeSettings.defaultChunkingMode,
-      maxTokens: input.chunking?.maxTokens ?? runtimeSettings.chunkTokenLimit,
-      overlapTokens: input.chunking?.overlapTokens ?? runtimeSettings.chunkOverlapTokens
+      mode: input.chunking?.mode ?? runtimeSettings.defaultChunkingMode, // 分块模式
+      maxTokens: input.chunking?.maxTokens ?? runtimeSettings.chunkTokenLimit, // 分块最大Token数
+      overlapTokens: input.chunking?.overlapTokens ?? runtimeSettings.chunkOverlapTokens // 分块重叠Token数
     };
 
     onProgress?.({
-      stage: "PARSING",
-      message: "正在解析文档内容",
-      progress: 8
+      stage: "PARSING", // 当前阶段名
+      message: "正在解析文档内容", // 给用户看的信息
+      progress: 8 // 进度条大概8%
     });
+    // 1. 创建source(项目)，绑定项目id，租户id，项目名称，项目描述，项目元数据
     const source = await createSource({
-      id: input.sourceId,
-      tenantId,
-      name: input.title,
-      description: "Created by SAG ingestDocument",
-      metadata: { ...(input.metadata ?? {}), traceId, chunking: chunkingOptions }
+      id: input.sourceId, // 项目id
+      tenantId, // 租户id
+      name: input.title, // 项目名称
+      description: "Created by SAG ingestDocument", // 项目描述
+      metadata: { ...(input.metadata ?? {}), traceId, chunking: chunkingOptions } // 项目元数据
     });
 
+    // 2. 切块，将文档内容切成多个小块
     const chunking = chunkMarkdown(input.content, chunkingOptions);
     onProgress?.({
       stage: "CHUNKING",
@@ -98,9 +101,11 @@ export class IngestionService {
       chunkCount: chunking.chunks.length,
       totalChunks: chunking.chunks.length
     });
+    // 3. 生成切片向量(批处理)
     const chunkEmbeddings = await this.embeddings.batchGenerate(chunking.chunks.map((chunk) => `${chunk.heading}\n${chunk.content}`));
 
     const preparedEvents = extract
+      // 4. 提取事件(批处理)
       ? await this.prepareEvents({
           input,
           chunks: chunking.chunks,
@@ -109,9 +114,12 @@ export class IngestionService {
         })
       : [];
 
+    // 5. 连接数据库
     const client = await pool.connect();
     try {
+      // 6. 开始事务
       await client.query("begin");
+      // 7. 写入文档记录
       await client.query(
         `
           insert into documents (id, source_id, title, content, status, parse_status, metadata)
@@ -119,6 +127,7 @@ export class IngestionService {
         `,
         [documentId, source.id, input.title, input.content, JSON.stringify({ ...(input.metadata ?? {}), chunking: chunkingOptions })]
       );
+      // 8. 写入进度
       onProgress?.({
         stage: "WRITING_GRAPH",
         message: "正在写入文档记录",
@@ -128,6 +137,7 @@ export class IngestionService {
         totalChunks: chunking.chunks.length
       });
 
+      // 9. 写入文档切片
       for (const section of chunking.sections) {
         await client.query(
           `
@@ -149,6 +159,7 @@ export class IngestionService {
         );
       }
 
+      // 10. 写入文档切片向量
       for (const [index, chunk] of chunking.chunks.entries()) {
         await client.query(
           `
@@ -172,6 +183,7 @@ export class IngestionService {
         );
       }
 
+      // 11. 写入事件
       for (const preparedEvent of preparedEvents) {
         await client.query(
           `
@@ -207,6 +219,7 @@ export class IngestionService {
         );
 
         for (const entity of preparedEvent.entities) {
+          // 12. 写入实体
           const saved = await upsertEntity({
             sourceId: source.id,
             type: entity.type,
@@ -214,6 +227,7 @@ export class IngestionService {
             description: entity.description,
             embedding: entity.entityEmbedding
           }, client);
+          // 13. 写入实体关系
           await client.query(
             `
               insert into event_entities (id, event_id, entity_id, weight, description, embedding)
@@ -233,6 +247,7 @@ export class IngestionService {
         }
       }
 
+      // 14. 写入进度
       onProgress?.({
         stage: "WRITING_GRAPH",
         message: "正在完成图谱关系写入",
@@ -241,13 +256,16 @@ export class IngestionService {
         eventCount: preparedEvents.length,
         totalChunks: chunking.chunks.length
       });
+      // 15. 更新文档状态
       await client.query(
         "update documents set status = 'COMPLETED', parse_status = 'COMPLETED', updated_at = now() where id = $1",
         [documentId]
       );
+      // 16. 提交事务
       await client.query("commit");
 
       logger.info({ traceId, documentId, chunkCount: chunking.chunks.length, eventCount: preparedEvents.length }, "document ingested");
+      // 17. 写入进度
       onProgress?.({
         stage: "COMPLETED",
         message: `处理完成：${chunking.chunks.length} 个切片，${preparedEvents.length} 个事件`,

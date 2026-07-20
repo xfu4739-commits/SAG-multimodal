@@ -5,13 +5,18 @@ import { createModelCallLogger } from "../observability/model-call-log.js";
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
 
 export interface LlmClient {
+  // 提取实体
   extractNamedEntities(query: string): Promise<string[]>;
+
+  // 提取event
   extractEventsFromChunk(input: {
     title: string;
     heading?: string;
     content: string;
     references: string[];
   }): Promise<ExtractedEvent[]>;
+
+  // 重排enent
   rerankEvents(input: {
     query: string;
     candidates: EventRecord[];
@@ -20,6 +25,7 @@ export interface LlmClient {
 }
 
 export class OpenAICompatibleLlmClient implements LlmClient {
+
   async extractNamedEntities(query: string): Promise<string[]> {
     const settings = await aiSettingsService.getRuntimeSettings();
     if (!settings.hasRemoteLlm) {

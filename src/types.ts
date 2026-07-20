@@ -1,4 +1,4 @@
-export type SearchStrategy = "vector" | "multi";
+export type SearchStrategy = "vector" | "multi";   // 支持扩展更多的策略
 export type SearchMode = "standard" | "fast";
 export type MultiSubStrategy = "multi" | "multi1" | "hopllm";
 export type ChunkingMode = "heading_strict" | "token";
@@ -10,7 +10,7 @@ export interface SearchInput {
   searchMode?: SearchMode;
   subStrategy?: MultiSubStrategy;
   topK?: number;
-  returnTrace?: boolean;
+  returnTrace?: boolean; // 是否返回trace
   multi?: {
     entityTopK?: number;
     multiTopK?: number;
@@ -115,17 +115,18 @@ export interface ProjectGraphRecord {
   }>;
 }
 
+// 入库文档输入
 export interface IngestDocumentInput {
-  sourceId?: string;
-  title: string;
-  content: string;
-  metadata?: Record<string, unknown>;
-  extract?: boolean;
-  waitForCompletion?: boolean;
-  chunking?: {
-    mode?: ChunkingMode;
-    maxTokens?: number;
-    overlapTokens?: number;
+  sourceId?: string; //绑定source id（项目id）可选
+  title: string; // 文档标题
+  content: string; // 文档内容
+  metadata?: Record<string, unknown>; // 文档元数据 可选
+  extract?: boolean; // 是否提取事件
+  waitForCompletion?: boolean; // 是否等待完成  可选
+  chunking?: { // 切片策略
+    mode?: ChunkingMode; // 切片模式 可选值：heading_strict（标题严格模式）、token（Token模式）
+    maxTokens?: number; // 切片最大Token数 可选
+    overlapTokens?: number; //切片最大重叠数 可选
   };
 }
 
@@ -160,6 +161,7 @@ export interface IngestProgressUpdate {
   totalChunks?: number;
 }
 
+// 事件类
 export interface ExtractedEvent {
   title: string;
   summary: string;
@@ -308,7 +310,7 @@ export interface McpToolCallRecord {
   createdAt: string;
 }
 
-export interface AiProviderSettingsRecord {
+export interface AiProviderSettingsRecord {  // 数据库中的AI提供者设置
   id: "global";
   embeddingBaseUrl: string;
   embeddingModel: string;
@@ -324,6 +326,7 @@ export interface AiProviderSettingsRecord {
   updatedAt: string;
 }
 
+// 公共AI提供者设置，不把apikey在网络中传输
 export interface PublicAiProviderSettings {
   id: "global";
   embeddingBaseUrl: string;

@@ -747,8 +747,14 @@ function resolveMcpServerCommand(): { command: string; args: string[]; cwd: stri
       cwd
     };
   }
+  const tsxBin = path.join(
+    cwd,
+    "node_modules",
+    ".bin",
+    process.platform === "win32" ? "tsx.cmd" : "tsx"
+  );
   return {
-    command: path.join(cwd, "node_modules", ".bin", "tsx"),
+    command: tsxBin,
     args: [path.join(cwd, "src", "mcp", "server.ts")],
     cwd
   };

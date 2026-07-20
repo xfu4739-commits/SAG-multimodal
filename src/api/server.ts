@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import Fastify from "fastify";
+import Fastify from "fastify";  //使用 Fastify 创建 HTTP 服务，注册所有 API 路由
 import fastifyStatic from "@fastify/static";
 import { z } from "zod";
 import { config, SUPPORTED_EMBEDDING_DIMENSIONS } from "../config/env.js";
@@ -14,11 +14,11 @@ import { aiSettingsService } from "../services/ai-settings-service.js";
 import { getPublicMcpSettings } from "../services/mcp-settings-service.js";
 import { listModelCallLogs } from "../observability/model-call-log.js";
 
-const rootDir = process.cwd();
-const webDistDir = path.join(rootDir, "web", "dist");
-const webIndexFile = path.join(webDistDir, "index.html");
+const rootDir = process.cwd();  // 获取当前工作目录，项目根目录
+const webDistDir = path.join(rootDir, "web", "dist"); // 获取web目录下的dist目录
+const webIndexFile = path.join(webDistDir, "index.html");  // 获取web目录下的index.html文件
 
-const ingestSchema = z.object({
+const ingestSchema = z.object({  // 定义摄取文档的参数结构和类型
   sourceId: z.string().uuid().optional(),
   title: z.string().min(1),
   content: z.string().min(1),
@@ -32,7 +32,7 @@ const ingestSchema = z.object({
   }).optional()
 });
 
-const searchSchema = z.object({
+const searchSchema = z.object({  // 定义搜索的参数结构和类型
   query: z.string().min(1),
   sourceIds: z.array(z.string().uuid()).min(1),
   strategy: z.enum(["vector", "multi"]).optional(),
@@ -55,7 +55,7 @@ const searchSchema = z.object({
   }).optional()
 });
 
-const uploadSchema = z.object({
+const uploadSchema = z.object({  // 定义上传文档的参数结构和类型
   sourceId: z.string().uuid().optional(),
   title: z.string().min(1).optional(),
   fileName: z.string().min(1),
@@ -68,30 +68,30 @@ const uploadSchema = z.object({
   }).optional()
 });
 
-const projectSchema = z.object({
+const projectSchema = z.object({  // 定义创建项目的参数结构和类型
   name: z.string().min(1),
   description: z.string().optional().nullable()
 });
 
-const projectUpdateSchema = z.object({
+const projectUpdateSchema = z.object({  // 定义更新项目的参数结构和类型
   name: z.string().min(1).optional(),
   description: z.string().optional().nullable()
 });
 
-const documentUpdateSchema = z.object({
+const documentUpdateSchema = z.object({  // 定义更新文档的参数结构和类型
   title: z.string().min(1).optional()
 });
 
-const createMcpSessionSchema = z.object({
+const createMcpSessionSchema = z.object({  // 定义创建MCP会话的参数结构和类型
   title: z.string().min(1).optional(),
   sourceIds: z.array(z.string().uuid()).optional()
 });
 
-const mcpMessageSchema = z.object({
+const mcpMessageSchema = z.object({  // 定义MCP消息的参数结构和类型
   content: z.string().min(1)
 });
 
-const aiSettingsSchema = z.object({
+const aiSettingsSchema = z.object({  // 定义AI设置的参数结构和类型
   embeddingBaseUrl: z.string().url(),
   embeddingModel: z.string().min(1),
   embeddingDimensions: z.literal(SUPPORTED_EMBEDDING_DIMENSIONS),
@@ -110,28 +110,39 @@ const aiSettingsSchema = z.object({
   chunkOverlapTokens: z.number().int().min(0).max(4096).default(100)
 });
 
-export function buildHttpServer() {
+export function buildHttpServer() {  // 构建HTTP服务器
   const app = Fastify({
-    logger: {
+    logger: {  // 配置日志记录器
       level: config.LOG_LEVEL,
       base: {
-        service: "sag"
+        service: "sag"  // 服务名称
       }
     }
   });
 
-  app.get("/health", async () => ({
+  app.get("/health", async () => ({  // 健康检查接口
     ok: true,
     service: "sag"
   }));
 
-  app.get("/api/model-call-logs", async (request) => {
-    const query = request.query as { after?: string };
-    const after = query.after ? Number(query.after) : 0;
+  app.get("/api/model-call-logs", async (request) => {  // 获取模型调用日志接口
+    
+     /*
+      method: GET
+      path:   /api/model-call-logs
+      query:  { after: "100" }
+      body:   (空)
+      headers: ...
+      这里框架不会自动解析出参数，需要手动解析
+    */
+
+    // request.query — 查询参数对象，如 { after: "123" }
+    const query = request.query as { after?: string }; // 类型断言，将 request.query 转换为 { after?: string } 类型
+    const after = query.after ? Number(query.after) : 0; // 如果 query.after 存在，则转换为数字，否则为 0
     return listModelCallLogs(Number.isFinite(after) ? after : 0);
   });
 
-  app.get("/sources", async (request) => {
+  app.get("/sources", async (request) => {  // 获取源接口
     const query = request.query as { limit?: string; cursor?: string };
     return {
       sources: await graphService.listSources({
@@ -141,7 +152,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.get("/api/sources", async (request) => {
+  app.get("/api/sources", async (request) => {  // 获取源接口
     const query = request.query as { limit?: string; cursor?: string };
     return {
       sources: await webuiService.listSources({
@@ -151,7 +162,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.get("/api/projects", async (request) => {
+  app.get("/api/projects", async (request) => {  // 获取项目接口
     const query = request.query as { limit?: string; cursor?: string; includeArchived?: string };
     return {
       projects: await webuiService.listProjects({
@@ -162,13 +173,13 @@ export function buildHttpServer() {
     };
   });
 
-  app.post("/api/projects", async (request, reply) => {
+  app.post("/api/projects", async (request, reply) => {  // 创建项目接口
     const input = projectSchema.parse(request.body);
     const project = await webuiService.createProject(input);
     return reply.code(201).send({ project });
   });
 
-  app.patch("/api/projects/:projectId", async (request) => {
+  app.patch("/api/projects/:projectId", async (request) => {  // 更新项目接口
     const params = request.params as { projectId: string };
     z.string().uuid().parse(params.projectId);
     const input = projectUpdateSchema.parse(request.body);
@@ -177,7 +188,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.post("/api/projects/:projectId/archive", async (request) => {
+  app.post("/api/projects/:projectId/archive", async (request) => {  // 归档项目接口
     const params = request.params as { projectId: string };
     z.string().uuid().parse(params.projectId);
     return {
@@ -185,7 +196,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.post("/api/projects/:projectId/restore", async (request) => {
+  app.post("/api/projects/:projectId/restore", async (request) => {  // 恢复项目接口
     const params = request.params as { projectId: string };
     z.string().uuid().parse(params.projectId);
     return {
@@ -193,7 +204,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.delete("/api/projects/:projectId", async (request, reply) => {
+  app.delete("/api/projects/:projectId", async (request, reply) => {  // 删除项目接口
     const params = request.params as { projectId: string };
     const query = request.query as { permanent?: string };
     z.string().uuid().parse(params.projectId);
@@ -208,7 +219,7 @@ export function buildHttpServer() {
     return webuiService.deleteProject(params.projectId);
   });
 
-  app.get("/api/sources/:sourceId/documents", async (request) => {
+  app.get("/api/sources/:sourceId/documents", async (request) => {  // 获取文档接口
     const params = request.params as { sourceId: string };
     const query = request.query as { includeArchived?: string };
     z.string().uuid().parse(params.sourceId);
@@ -219,7 +230,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.get("/api/projects/:projectId/documents", async (request) => {
+  app.get("/api/projects/:projectId/documents", async (request) => {  // 获取项目文档接口
     const params = request.params as { projectId: string };
     const query = request.query as { includeArchived?: string };
     z.string().uuid().parse(params.projectId);
@@ -230,7 +241,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.get("/api/projects/:projectId/stats", async (request) => {
+  app.get("/api/projects/:projectId/stats", async (request) => {  // 获取项目统计接口
     const params = request.params as { projectId: string };
     z.string().uuid().parse(params.projectId);
     return {
@@ -238,7 +249,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.get("/api/projects/:projectId/graph", async (request) => {
+  app.get("/api/projects/:projectId/graph", async (request) => {  // 获取项目图谱接口
     const params = request.params as { projectId: string };
     z.string().uuid().parse(params.projectId);
     return {
@@ -246,7 +257,7 @@ export function buildHttpServer() {
     };
   });
 
-  app.post("/api/documents/upload", async (request, reply) => {
+  app.post("/api/documents/upload", async (request, reply) => {  // 上传文档接口  
     const input = uploadSchema.parse(request.body);
     const result = await webuiService.uploadDocument(input);
     return reply.code(201).send(result);
